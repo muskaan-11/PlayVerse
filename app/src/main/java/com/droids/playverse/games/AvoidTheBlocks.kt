@@ -1,11 +1,7 @@
 package com.droids.playverse.games
 
-import android.R.attr.x
-import android.os.Bundle
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
-import androidx.activity.compose.setContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.fadeIn
@@ -19,11 +15,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.runtime.setValue
@@ -53,12 +46,19 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.droids.playverse.AdConstants
-import com.droids.playverse.GameOverScreen
-import com.droids.playverse.InterstitialAdManager
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.droids.playverse.ads.AdConstants
+import com.droids.playverse.ui.components.ContinueConfig
+import com.droids.playverse.ads.InterstitialAdManager
 import com.droids.playverse.R
-import com.droids.playverse.data.AvoidBlockHighScorePref
-import com.droids.playverse.data.SnakeHighScorePref
+import com.droids.playverse.sound.SoundManager
+import com.droids.playverse.ads.RewardedAdManager
+import com.droids.playverse.data.ServiceLocator
+import com.droids.playverse.ui.screens.requestReview
+import com.droids.playverse.ui.components.ContinueDialog
+import com.droids.playverse.ui.components.TopBar
+import com.droids.playverse.ui.viewmodel.CoinViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.random.Random
@@ -70,16 +70,6 @@ private const val BLOCK_GAP = 20f
 private const val ROCKET_WIDTH = 90f
 private const val ROCKET_HEIGHT = 140f
 
-class AvoidTheBlocks : ComponentActivity() {
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        InterstitialAdManager.load(
-            this,
-            AdConstants.TEST_INTERSTITIAL_ID
-        )
-        setContent { AvoidTheBlocksGameUI() }
-    }
-}
 enum class EntityType { BLOCK, STAR }
 class GameEntity(val col: Int, var y: Float, val type: EntityType,val color: Color = Color.Transparent,val gradientIndex: Int = 0)
 
@@ -103,16 +93,29 @@ val blockGradients = listOf(
 
 @Preview(showSystemUi = true)
 @Composable
-fun AvoidTheBlocksGameUI() {
+fun AvoidTheBlocksGameUI(onExit: () -> Unit = {}) {
     var score by remember { mutableIntStateOf(0) }
     var isGameOver by remember { mutableStateOf(false) }
     var gameInstance by remember { mutableIntStateOf(0) }
     val context= LocalContext.current
-    var highScore by remember {
-        mutableStateOf(AvoidBlockHighScorePref.getHighScore(context))
-    }
+    val scoreRepository = remember { ServiceLocator.provideScoreRepository() }
+    val highScore by scoreRepository.highScoreFlow("avoid_blocks").collectAsStateWithLifecycle(initialValue = 0)
     var hasShownInterstitial by remember { mutableStateOf(false) }
     val activity = LocalActivity.current
+    val coinViewModel: CoinViewModel = viewModel()
+    val coinBalance by coinViewModel.balance.collectAsStateWithLifecycle()
+    val coroutineScope = rememberCoroutineScope()
+    var continueOffered by remember { mutableStateOf(false) }
+    var showContinueDialog by remember { mutableStateOf(false) }
+    var continueTrigger by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(Unit) {
+        activity?.let {
+            InterstitialAdManager.load(it, AdConstants.TEST_INTERSTITIAL_ID)
+            RewardedAdManager.load(it, AdConstants.TEST_REWARDED_ID)
+        }
+    }
+
     BackHandler(enabled = !isGameOver) {
 
         if (!hasShownInterstitial) {
@@ -120,22 +123,23 @@ fun AvoidTheBlocksGameUI() {
 
             activity?.let {
                 InterstitialAdManager.show(it) {
-                    it.finish()
+                    onExit()
                 }
-            } ?: run {
-                activity?.finish()
-            }
+            } ?: onExit()
 
         } else {
-            activity?.finish()
+            onExit()
         }
     }
 
     LaunchedEffect(isGameOver) {
         if (isGameOver) {
-            if (score > highScore) {
-                highScore = score
-                AvoidBlockHighScorePref.saveHighScore(context, score)
+            ServiceLocator.provideCoinRepository().earnFromSession("avoid_blocks")
+            ServiceLocator.provideCoinRepository().earnFromScore("avoid_blocks", score)
+            val isNewHighScore = scoreRepository.submitScore("avoid_blocks", score)
+            if (isNewHighScore) requestReview(context)
+            if (!continueOffered) {
+                showContinueDialog = true
             }
         }
     }
@@ -146,7 +150,7 @@ fun AvoidTheBlocksGameUI() {
     ) {
         Spacer(modifier = Modifier.fillMaxWidth()
             .fillMaxHeight(0.01f))
-        TopBar("AVOID THE BLOCKS", Color(0xFF2F79C9))
+        TopBar("AVOID THE BLOCKS", Color(0xFF2F79C9), onBack = onExit)
         DividerLine()
         Spacer(Modifier.height(20.dp))
         ScoreRow(score, highScore)
@@ -161,6 +165,7 @@ fun AvoidTheBlocksGameUI() {
                 GamePlayArea(
                     score=score,
                     isPlaying = !isGameOver,
+                    continueTrigger = continueTrigger,
                     onScoreUpdate = { score += 1 },
                     onGameOver = { isGameOver = true }
                 )
@@ -183,40 +188,86 @@ fun AvoidTheBlocksGameUI() {
         )
     }
 
-            AnimatedVisibility(
-                visible = isGameOver,
-                enter = fadeIn() + scaleIn(),
-                exit = fadeOut() + scaleOut()
-            ) {
-                GameOverScreen(score, highScore) {
-
-                    if (!hasShownInterstitial) {
-                        hasShownInterstitial = true
-
-                        activity?.let {
-                            InterstitialAdManager.show(it) {
-                                score = 0
-                                isGameOver = false
-                                gameInstance++
-                            }
-                        } ?: run {
-                            // fallback
-                            score = 0
-                            isGameOver = false
-                            gameInstance++
-                        }
-
-                    } else {
-                        score = 0
+    if (showContinueDialog) {
+        ContinueDialog(
+            cost = ContinueConfig.COST,
+            coinBalance = coinBalance,
+            onContinue = {
+                coroutineScope.launch {
+                    if (ServiceLocator.provideCoinRepository().spend(ContinueConfig.COST, "continue_avoid_blocks")) {
+                        continueOffered = true
+                        showContinueDialog = false
+                        continueTrigger++
                         isGameOver = false
-                        gameInstance++
                     }
                 }
-
+            },
+            onWatchAd = {
+                activity?.let {
+                    var rewardEarned = false
+                    RewardedAdManager.show(
+                        activity = it,
+                        adUnitId = AdConstants.TEST_REWARDED_ID,
+                        source = "continue_avoid_blocks_ad",
+                        onRewardEarned = { rewardEarned = true },
+                        onDismiss = {
+                            continueOffered = true
+                            showContinueDialog = false
+                            if (rewardEarned) {
+                                continueTrigger++
+                                isGameOver = false
+                            }
+                        }
+                    )
+                } ?: run {
+                    continueOffered = true
+                    showContinueDialog = false
+                }
+            },
+            onDecline = {
+                continueOffered = true
+                showContinueDialog = false
             }
+        )
+    }
+
+    AnimatedVisibility(
+        visible = isGameOver && !showContinueDialog,
+        enter = fadeIn() + scaleIn(),
+        exit = fadeOut() + scaleOut()
+    ) {
+        GameOverScreen(score, highScore) {
+
+            if (!hasShownInterstitial) {
+                hasShownInterstitial = true
+
+                activity?.let {
+                    InterstitialAdManager.show(it) {
+                        score = 0
+                        isGameOver = false
+                        continueOffered = false
+                        gameInstance++
+                    }
+                } ?: run {
+                    score = 0
+                    isGameOver = false
+                    continueOffered = false
+                    gameInstance++
+                }
+
+            } else {
+                score = 0
+                isGameOver = false
+                continueOffered = false
+                gameInstance++
+            }
+        }
 
 
     }
+
+
+}
 
 
 @Composable
@@ -240,12 +291,18 @@ fun ScoreRow(score: Int, bestScore: Int) {
 class GameBlock(val col: Int, var y: Float)
 
 @Composable
-fun GamePlayArea(score:Int,isPlaying: Boolean, onScoreUpdate: () -> Unit, onGameOver: () -> Unit) {
+fun GamePlayArea(score:Int,isPlaying: Boolean, continueTrigger: Int = 0, onScoreUpdate: () -> Unit, onGameOver: () -> Unit) {
     val entities = remember { mutableListOf<GameEntity>() }
     val rocketX = remember { Animatable(0f) }
     var canvasSize by remember { mutableStateOf(Size.Zero) }
     val scope = rememberCoroutineScope()
     var frameTrigger by remember { mutableLongStateOf(0L) }
+
+    LaunchedEffect(continueTrigger) {
+        if (continueTrigger > 0) {
+            entities.clear()
+        }
+    }
 
     LaunchedEffect(canvasSize) {
         if (canvasSize.width > 0 && rocketX.value == 0f) {
@@ -420,7 +477,7 @@ fun GamePlayArea(score:Int,isPlaying: Boolean, onScoreUpdate: () -> Unit, onGame
 
             val rocketImage = ImageBitmap.imageResource(id = R.drawable.main_rocket)
 
-                // Rocket
+            // Rocket
             Canvas(modifier = Modifier.fillMaxSize()) {
 
                 val rocketHeight = size.height * 0.18f

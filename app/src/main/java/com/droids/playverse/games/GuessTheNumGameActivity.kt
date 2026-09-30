@@ -1,11 +1,8 @@
 package com.droids.playverse.games
 
-import android.os.Bundle
 import android.util.Log
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
-import androidx.activity.compose.setContent
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -19,11 +16,9 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
@@ -31,9 +26,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
@@ -42,6 +35,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -65,36 +59,53 @@ import java.util.concurrent.TimeUnit
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 
 import androidx.compose.ui.window.Dialog
-import com.droids.playverse.AdConstants
-import com.droids.playverse.InterstitialAdManager
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.droids.playverse.ads.AdConstants
+import com.droids.playverse.ui.components.ContinueConfig
+import com.droids.playverse.ads.InterstitialAdManager
 import com.droids.playverse.R
+import com.droids.playverse.ads.RewardedAdManager
+import com.droids.playverse.data.ServiceLocator
+import com.droids.playverse.ui.screens.requestReview
+import com.droids.playverse.ui.components.ContinueDialog
+import com.droids.playverse.ui.components.TopBar
+import com.droids.playverse.ui.viewmodel.CoinViewModel
 import kotlinx.coroutines.delay
-
-class GuessTheNumGameActivity: ComponentActivity(){
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        InterstitialAdManager.load(
-            this,
-            AdConstants.TEST_INTERSTITIAL_ID
-        )
-        setContent{
-            GuessGame()
-
-        }
-    }
-}
+import kotlinx.coroutines.launch
 
 @Preview(showSystemUi = true)
 @Composable
-fun GuessGame(){
+fun GuessGame(onExit: () -> Unit = {}){
     var soundOn by remember { mutableStateOf(true) }
     var guess by remember { mutableStateOf("") }
     val focusManager = LocalFocusManager.current
     val activity = LocalActivity.current
+    val context = LocalContext.current
     var hasShownInterstitial by remember { mutableStateOf(false) }
+
+    // "Score" for this game is attempts left at the moment of a correct guess —
+    // higher is better (fewer guesses used), so it fits ScoreRepository's
+    // greater-than-wins high-score semantics.
+    val scoreRepository = remember { ServiceLocator.provideScoreRepository() }
+    val bestAttemptsLeft by scoreRepository.highScoreFlow("guess").collectAsStateWithLifecycle(initialValue = 0)
+
+    val coinViewModel: CoinViewModel = viewModel()
+    val coinBalance by coinViewModel.balance.collectAsStateWithLifecycle()
+    val coroutineScope = rememberCoroutineScope()
+    var continueOffered by remember { mutableStateOf(false) }
+    var showContinueDialog by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        activity?.let {
+            InterstitialAdManager.load(it, AdConstants.TEST_INTERSTITIAL_ID)
+            RewardedAdManager.load(it, AdConstants.TEST_REWARDED_ID)
+        }
+    }
 
 
     val colors = listOf(
@@ -134,9 +145,12 @@ fun GuessGame(){
     }
     LaunchedEffect(showCelebration) {
         if (showCelebration) {
+            val isNewBest = scoreRepository.submitScore("guess", attempts)
             delay(2500)
             showCelebration = false
             showCorrectDialog = true       // 3️⃣ open dialog after delay
+            ServiceLocator.provideCoinRepository().earnFromSession("guess")
+            if (isNewBest) requestReview(context)
         }
     }
 
@@ -146,19 +160,27 @@ fun GuessGame(){
 
             activity?.let {
                 InterstitialAdManager.show(it) {
-                    it.finish()
+                    onExit()
                 }
-            } ?: run {
-                activity?.finish()
-            }
+            } ?: onExit()
 
         } else {
-            activity?.finish()
+            onExit()
         }
     }
 
     val isCorrectDialog = showCorrectDialog
-    val isGameOverDialog = !showCorrectDialog && (attempts == 0|| attempts<0)
+    val isOutOfAttempts = !showCorrectDialog && (attempts == 0 || attempts < 0)
+    val isGameOverDialog = isOutOfAttempts && !showContinueDialog
+
+    LaunchedEffect(isOutOfAttempts) {
+        if (isOutOfAttempts) {
+            ServiceLocator.provideCoinRepository().earnFromSession("guess")
+            if (!continueOffered) {
+                showContinueDialog = true
+            }
+        }
+    }
 
     val bgColor = listOf(Color(0xFFE0D7FF),Color(0xFFF3EEFF))
 
@@ -178,44 +200,11 @@ fun GuessGame(){
             modifier = Modifier.fillMaxSize()
                 .background(brush = Brush.linearGradient(bgColor))
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .fillMaxHeight(0.1f),
-                verticalAlignment = Alignment.Bottom,
-            ) {
-//                Spacer(modifier = Modifier.size(48.dp))
-                Box(
-                    modifier = Modifier
-                        .weight(1f),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "GUESS THE NUMBER",
-                        color = Color(0xFF7A6FE8),
-                        fontSize = 25.sp,
-                        fontFamily = FontFamily(Font(R.font.poppins_extrabold))
-                    )
-                }
-//                IconButton(
-//                    onClick = {
-////                    soundOn = !soundOn // 🔥 TOGGLE
-//                    },
-//                    modifier = Modifier
-//                        .padding(end = 20.dp)
-//                        .size(50.dp)
-//                        .background(Color.White, CircleShape)
-//                ) {
-//                    Icon(
-//                        painter = painterResource(
-//                            if (soundOn) R.drawable.audio else R.drawable.play_again_icon
-//                        ),
-//                        contentDescription = "sound toggle",
-//                        tint = Color(0xFF7A6FE8),
-//                        modifier = Modifier.size(40.dp)
-//                    )
-//                }
-            }
+            TopBar(
+                title = "GUESS THE NUMBER",
+                accentColor = Color(0xFF7A6FE8),
+                onBack = onExit
+            )
             Spacer(
                 modifier = Modifier.fillMaxWidth()
                     .padding(top = 10.dp)
@@ -361,7 +350,7 @@ fun GuessGame(){
                                     val diff = userGuess - correctNumber
 
                                     when {
-                                         diff == 0 ->{
+                                        diff == 0 ->{
 //                                            popupMessage = "Correct. You guessed it right!"
 //                                            popupColors = guessCorrect
 //                                            attempts = 5
@@ -539,6 +528,7 @@ fun GuessGame(){
                                                     guess = ""
                                                     showDigits = false
                                                     showPopup = false
+                                                    continueOffered = false
                                                     correctNumber = (1..100).random()
                                                 }
                                             } ?: run {
@@ -547,6 +537,7 @@ fun GuessGame(){
                                                 guess = ""
                                                 showDigits = false
                                                 showPopup = false
+                                                continueOffered = false
                                                 correctNumber = (1..100).random()
                                             }
 
@@ -556,6 +547,7 @@ fun GuessGame(){
                                             guess = ""
                                             showDigits = false
                                             showPopup = false
+                                            continueOffered = false
                                             correctNumber = (1..100).random()
                                         }
                                     }),
@@ -605,6 +597,54 @@ fun GuessGame(){
         if (showCelebration) {
             KonfettiCelebration()
         }
+
+        if (showContinueDialog) {
+            ContinueDialog(
+                cost = ContinueConfig.COST,
+                coinBalance = coinBalance,
+                onContinue = {
+                    coroutineScope.launch {
+                        if (ServiceLocator.provideCoinRepository().spend(ContinueConfig.COST, "continue_guess_the_number")) {
+                            continueOffered = true
+                            showContinueDialog = false
+                            // Same hidden number, fresh attempts, cleared input —
+                            // everything else about the run is untouched.
+                            attempts = 3
+                            guess = ""
+                            showPopup = false
+                        }
+                    }
+                },
+                onWatchAd = {
+                    activity?.let {
+                        var rewardEarned = false
+                        RewardedAdManager.show(
+                            activity = it,
+                            adUnitId = AdConstants.TEST_REWARDED_ID,
+                            source = "continue_guess_the_number_ad",
+                            onRewardEarned = { rewardEarned = true },
+                            onDismiss = {
+                                continueOffered = true
+                                showContinueDialog = false
+                                if (rewardEarned) {
+                                    attempts = 3
+                                    guess = ""
+                                    showPopup = false
+                                }
+                            }
+                        )
+                    } ?: run {
+                        continueOffered = true
+                        showContinueDialog = false
+                    }
+                },
+                onDecline = {
+                    continueOffered = true
+                    showContinueDialog = false
+                }
+            )
+        }
+
         if (isCorrectDialog || isGameOverDialog) {
             Dialog(onDismissRequest = {}) {
                 Card(
@@ -645,6 +685,16 @@ fun GuessGame(){
                             fontFamily = FontFamily(Font(R.font.inter_regular))
                         )
 
+                        if (isCorrectDialog) {
+                            Text(
+                                text = "Best: $bestAttemptsLeft attempt(s) to spare",
+                                textAlign = TextAlign.Center,
+                                fontSize = 13.sp,
+                                color = Color(0xFF7A6FE8),
+                                fontFamily = FontFamily(Font(R.font.poppins_bold))
+                            )
+                        }
+
                         // 🔹 PLAY AGAIN BUTTON (same for both)
                         Button(
                             onClick = {
@@ -653,6 +703,7 @@ fun GuessGame(){
                                 guess = ""
                                 showDigits = false
                                 showPopup = false
+                                continueOffered = false
                                 correctNumber = (1..100).random()
                             },
                             colors = ButtonDefaults.buttonColors(

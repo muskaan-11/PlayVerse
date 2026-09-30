@@ -1,6 +1,5 @@
 package com.droids.playverse.data
 
-import android.content.Context
 import androidx.compose.runtime.snapshots.toInt
 import androidx.compose.ui.graphics.Color
 import com.droids.playverse.R
@@ -125,90 +124,4 @@ object GameMode{
     const val ONE_PLAYER = "one_player"
     const val TWO_PLAYER = "two_player"
 
-}
-
-object HighScorePref{
-    private const val PREF_NAME = "pref_name"
-    private const val KEY_HIGH_SCORE ="high_score"
-
-    fun saveHighScore(context: Context, score:Int ){
-        val pref = context.getSharedPreferences(PREF_NAME,Context.MODE_PRIVATE)
-        val currentHigh = pref.getInt(KEY_HIGH_SCORE,0)
-
-        if(score>currentHigh){
-            pref.edit().putInt(KEY_HIGH_SCORE,score).apply()
-        }
-    }
-    fun getHighScore(context: Context): Int {
-        val pref = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
-        return pref.getInt(KEY_HIGH_SCORE, 0)
-    }
-}
-object SnakeHighScorePref{
-    private const val SNAKE_PREF_NAME = "snake_high_score_pref"
-    private const val SNAKE_KEY_HIGH_SCORE = "snake_high_score"
-
-    fun saveHighScore(context: Context, score:Int ){
-        val pref = context.getSharedPreferences(SNAKE_PREF_NAME,Context.MODE_PRIVATE)
-        val currentHigh = pref.getInt(SNAKE_KEY_HIGH_SCORE,0)
-
-        if(score>currentHigh){
-            pref.edit().putInt(SNAKE_KEY_HIGH_SCORE,score).apply()
-        }
-    }
-    fun getHighScore(context: Context): Int {
-        val pref = context.getSharedPreferences(SNAKE_PREF_NAME, Context.MODE_PRIVATE)
-        return pref.getInt(SNAKE_KEY_HIGH_SCORE, 0)
-    }
-}
-object AvoidBlockHighScorePref{
-    private const val AVOID_PREF_NAME = "avoid_high_score_pref"
-    private const val AVOID_KEY_HIGH_SCORE = "avoid_high_score"
-
-    fun saveHighScore(context: Context, score:Int ){
-        val pref = context.getSharedPreferences(AVOID_PREF_NAME,Context.MODE_PRIVATE)
-        val currentHigh = pref.getInt(AVOID_KEY_HIGH_SCORE,0)
-
-        if(score>currentHigh){
-            pref.edit().putInt(AVOID_KEY_HIGH_SCORE,score).apply()
-        }
-    }
-    fun getHighScore(context: Context): Int {
-        val pref = context.getSharedPreferences(AVOID_PREF_NAME, Context.MODE_PRIVATE)
-        return pref.getInt(AVOID_KEY_HIGH_SCORE, 0)
-    }
-}
-object BrickBreakHighScorePref{
-    private const val BRICK_PREF_NAME = "brick_high_score_pref"
-    private const val BRICK_KEY_HIGH_SCORE = "brick_high_score"
-
-    fun saveHighScore(context: Context, score:Int ){
-        val pref = context.getSharedPreferences(BRICK_PREF_NAME,Context.MODE_PRIVATE)
-        val currentHigh = pref.getInt(BRICK_KEY_HIGH_SCORE,0)
-
-        if(score>currentHigh){
-            pref.edit().putInt(BRICK_KEY_HIGH_SCORE,score).apply()
-        }
-    }
-    fun getHighScore(context: Context): Int {
-        val pref = context.getSharedPreferences(BRICK_PREF_NAME, Context.MODE_PRIVATE)
-        return pref.getInt(BRICK_KEY_HIGH_SCORE, 0)
-    }
-}
-object CatchTheObjectHighScorePref{
-    private const val CATCH_OBJECT_PREF_NAME = "catch_obj_score_pref"
-    private const val CATCH_OBJECT_HIGH_SCORE = "catch_obj_score"
-
-    fun saveHighScore(context: Context, score:Int ){
-        val pref = context.getSharedPreferences(CATCH_OBJECT_PREF_NAME,Context.MODE_PRIVATE)
-        val currentHigh = pref.getInt(CATCH_OBJECT_HIGH_SCORE,0)
-
-        if(score>currentHigh){
-            pref.edit().putInt(CATCH_OBJECT_HIGH_SCORE,score).apply()
-        }
-    }
-    fun getHighScore(context: Context): Int {
-        val pref = context.getSharedPreferences(CATCH_OBJECT_PREF_NAME, Context.MODE_PRIVATE)
-        return pref.getInt(CATCH_OBJECT_HIGH_SCORE, 0)
-    }
 }

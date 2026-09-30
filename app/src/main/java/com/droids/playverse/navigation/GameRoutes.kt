@@ -1,8 +1,23 @@
 package com.droids.playverse.navigation
 
 object GameRoutes {
-    const val HOME="home"
-    const val INFO = "info"
+
+    const val ARG_GAME_ID = "gameId"
+
+    const val HOME = "home"
+    const val ONE_PLAYER_LIST = "one_player_list"
+    const val TWO_PLAYER_LIST = "two_player_list"
+    const val EARN_COINS = "earn_coins"
+    const val SETTINGS = "settings"
+    const val PRIVACY_POLICY = "privacy_policy"
+
+    const val INFO = "info/{$ARG_GAME_ID}"
+    const val GAME = "game/{$ARG_GAME_ID}"
+    const val TWO_PLAYER_GAME = "two_player_game/{$ARG_GAME_ID}"
+
+    fun infoRoute(gameId: String) = "info/$gameId"
+    fun gameRoute(gameId: String) = "game/$gameId"
+    fun twoPlayerGameRoute(gameId: String) = "two_player_game/$gameId"
 
     const val TAP_GAME = "game/tap"
     const val GUESS_GAME = "game/guess"

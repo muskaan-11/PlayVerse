@@ -7,7 +7,7 @@
 
 
     <application
-        android:name=".AdClass"
+        android:name=".ads.AdClass"
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
@@ -22,81 +22,14 @@
             android:value="ca-app-pub-8678839926764431~1604985733" />
 
         <activity
-            android:name=".MainActivity"
-            android:exported="true"
+            android:name=".ui.screens.MainActivity"
+            android:exported="false"
             android:label="@string/app_name"
             android:theme="@style/Theme.PlayVerse">
         </activity>
 
         <activity
-            android:name=".games.TapGameActivity"
-            android:exported="true"
-            android:label="@string/app_name"
-            android:theme="@style/Theme.PlayVerse">
-        </activity>
-        <activity
-            android:name=".games.GuessTheNumGameActivity"
-            android:exported="true"
-            android:label="@string/app_name"
-            android:theme="@style/Theme.PlayVerse">
-        </activity>
-        <activity
-            android:name=".games.SnakeGameActivity"
-            android:exported="true"
-            android:label="@string/app_name"
-            android:theme="@style/Theme.PlayVerse">
-        </activity>
-        <activity
-            android:name=".games.AvoidTheBlocks"
-            android:exported="true"
-            android:label="@string/app_name"
-            android:theme="@style/Theme.PlayVerse">
-        </activity>
-        <activity
-            android:name=".games.BrickBreaker"
-            android:exported="true"
-            android:label="@string/app_name"
-            android:theme="@style/Theme.PlayVerse">
-        </activity>
-        <activity
-            android:name=".games.CatchTheObject"
-            android:exported="true"
-            android:label="@string/app_name"
-            android:theme="@style/Theme.PlayVerse">
-        </activity>
-        <activity
-            android:name=".games.TicTacToeActivity"
-            android:exported="true"
-            android:label="@string/app_name"
-            android:theme="@style/Theme.PlayVerse">
-        </activity>
-        <activity
-            android:name=".games.MemoryMatchActivity"
-            android:exported="true"
-            android:label="@string/app_name"
-            android:theme="@style/Theme.PlayVerse">
-        </activity>
-
-        <activity
-            android:name=".OnePlayerMain"
-            android:exported="true"
-            android:label="@string/app_name"
-            android:theme="@style/Theme.PlayVerse">
-        </activity>
-        <activity
-            android:name=".TwoPlayerMain"
-            android:exported="true"
-            android:label="@string/app_name"
-            android:theme="@style/Theme.PlayVerse">
-        </activity>
-        <activity
-            android:name=".info_screens.InfoScreen"
-            android:exported="true"
-            android:label="@string/app_name"
-            android:theme="@style/Theme.PlayVerse">
-        </activity>
-        <activity
-            android:name=".SplashActivity"
+            android:name=".ui.screens.SplashActivity"
             android:exported="true"
             android:label="@string/app_name"
             android:theme="@style/Theme.PlayVerse">

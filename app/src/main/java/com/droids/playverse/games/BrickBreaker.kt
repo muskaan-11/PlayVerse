@@ -1,15 +1,7 @@
 package com.droids.playverse.games
 
-import android.os.Bundle
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
-import androidx.activity.compose.setContent
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -17,10 +9,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.setValue
@@ -46,160 +35,145 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.droids.playverse.AdConstants
-import com.droids.playverse.GameOverScreen
-import com.droids.playverse.InterstitialAdManager
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.droids.playverse.ads.AdConstants
+import com.droids.playverse.ui.components.ContinueConfig
+import com.droids.playverse.ads.InterstitialAdManager
 import com.droids.playverse.R
-import com.droids.playverse.SnakeGameEvent
-import com.droids.playverse.data.BrickBreakHighScorePref
+import com.droids.playverse.sound.SoundManager
+import com.droids.playverse.ads.RewardedAdManager
+import com.droids.playverse.data.ServiceLocator
+import com.droids.playverse.ui.screens.requestReview
+import com.droids.playverse.ui.components.ContinueDialog
+import com.droids.playverse.ui.components.TopBar
+import com.droids.playverse.ui.viewmodel.CoinViewModel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
-class BrickBreaker : ComponentActivity() {
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        InterstitialAdManager.load(
-            this,
-            AdConstants.TEST_INTERSTITIAL_ID
-        )
-        setContent { BrickBreakerScreen() }
-    }
-}
 enum class GameState {
     PLAYING,
     GAME_OVER
 }
 @Preview(showSystemUi = true)
 @Composable
-fun BrickBreakerScreen() {
+fun BrickBreakerScreen(onExit: () -> Unit = {}) {
     var hasShownInterstitial by remember { mutableStateOf(false) }
     val activity = LocalActivity.current
     var score by remember { mutableStateOf(0) }
     var context = LocalContext.current
-    var best by remember {
-        mutableStateOf(BrickBreakHighScorePref.getHighScore(context))
-    }
+    val scoreRepository = remember { ServiceLocator.provideScoreRepository() }
+    val persistedBest by scoreRepository.highScoreFlow("brick").collectAsStateWithLifecycle(initialValue = 0)
+    // Live "best" reflects the higher of what's on disk and the current run's score,
+    // so the chip updates instantly during play without hitting the DB on every hit.
+    val best = maxOf(persistedBest, score)
+    var scoreSubmitted by remember { mutableStateOf(false) }
     var gameState by remember { mutableStateOf(GameState.PLAYING) }
+    var resetTrigger by remember { mutableIntStateOf(0) }
+    var continueTrigger by remember { mutableIntStateOf(0) }
+    val coinViewModel: CoinViewModel = viewModel()
+    val coinBalance by coinViewModel.balance.collectAsStateWithLifecycle()
+    val coroutineScope = rememberCoroutineScope()
+    var continueOffered by remember { mutableStateOf(false) }
+    var showContinueDialog by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        activity?.let {
+            InterstitialAdManager.load(it, AdConstants.TEST_INTERSTITIAL_ID)
+            RewardedAdManager.load(it, AdConstants.TEST_REWARDED_ID)
+        }
+    }
 
     val handleGameOver = {
         gameState = GameState.GAME_OVER
-        if (score > best) {
-            best = score
-            BrickBreakHighScorePref.saveHighScore(context, score)
+        coroutineScope.launch {
+            ServiceLocator.provideCoinRepository().earnFromSession("brick")
+            ServiceLocator.provideCoinRepository().earnFromScore("brick", score)
+            if (!scoreSubmitted) {
+                scoreSubmitted = true
+                if (scoreRepository.submitScore("brick", score)) requestReview(context)
+            }
+        }
+        if (!continueOffered) {
+            showContinueDialog = true
         }
     }
     BackHandler {
         gameState=GameState.GAME_OVER
+        if (!scoreSubmitted) {
+            scoreSubmitted = true
+            coroutineScope.launch {
+                if (scoreRepository.submitScore("brick", score)) requestReview(context)
+            }
+        }
         if (!hasShownInterstitial) {
             hasShownInterstitial = true
 
             activity?.let {
                 InterstitialAdManager.show(it) {
-                    it.finish()
+                    onExit()
                 }
-            } ?: run {
-                activity?.finish()
-            }
+            } ?: onExit()
 
         } else {
-            activity?.finish()
+            onExit()
         }
     }
 
     // 1. Wrap EVERYTHING in a Box to allow layering
     Box(modifier = Modifier.fillMaxSize(),) {
 
-        // 2. The Main Game UI
+        // 2. The Main Game UI — always mounted so mid-run state (bricks, score,
+        // paddle position) survives a continue instead of being torn down.
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color(0xFFD1E9FF))
         ) {
             Spacer(modifier = Modifier.fillMaxWidth().fillMaxHeight(0.01f))
-            TopBar("BRICK BREAKER",Color(0xFF2F79C9))
+            TopBar("BRICK BREAKER", Color(0xFF2F79C9), onBack = onExit)
             Spacer(Modifier.height(12.dp))
             DividerLine2()
 
-            if(gameState == GameState.GAME_OVER){
-                Box(modifier = Modifier.fillMaxWidth().fillMaxHeight(0.92f)) {
-                    Image(
-                        painter = painterResource(id = R.drawable.brick_end_bg),
-                        contentDescription = "img",
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop
+            Spacer(modifier = Modifier.fillMaxHeight(0.02f))
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                GameScoreChip("SCORE: $score")
+                GameScoreChip("BEST: $best")
+            }
+
+            Spacer(Modifier.height(12.dp))
+
+            Box(
+                modifier = Modifier.fillMaxWidth().fillMaxHeight(0.89f).padding(10.dp)
+                    .clip(RoundedCornerShape(24.dp))
+            ) {
+                Image(
+                    painter = painterResource(id = R.drawable.brick_break_bg),
+                    contentDescription = "img",
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop
+                )
+
+                BoxWithConstraints(modifier = Modifier.fillMaxSize().padding(10.dp)) {
+                    GameBoard(
+                        gameState = gameState,
+                        resetTrigger = resetTrigger,
+                        continueTrigger = continueTrigger,
+                        width = constraints.maxWidth.toFloat(),
+                        height = constraints.maxHeight.toFloat(),
+                        onGameOver = handleGameOver,
+                        onBrickHit = {
+                            SoundManager.playBrickPointSound()
+                            score++
+                        },
+                        onReset = { score = 0 }
                     )
-                    GameOverScreen2(
-                        score = score,
-                        highScore = best,
-                        onPlayAgain = {
-
-                            if (!hasShownInterstitial) {
-                                hasShownInterstitial = true
-
-                                activity?.let {
-                                    InterstitialAdManager.show(it) {
-                                        score = 0
-                                        gameState = GameState.PLAYING
-                                    }
-                                } ?: run {
-                                    score = 0
-                                    gameState = GameState.PLAYING
-                                }
-
-                            } else {
-                                score = 0
-                                gameState = GameState.PLAYING
-                            }
-                        }
-                    )
-
                 }
             }
-            else {
-
-                Spacer(modifier = Modifier.fillMaxHeight(0.02f))
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    GameScoreChip("SCORE: $score")
-                    GameScoreChip("BEST: $best")
-                }
-
-                Spacer(Modifier.height(12.dp))
-
-                Box(
-                    modifier = Modifier.fillMaxWidth().fillMaxHeight(0.89f).padding(10.dp)
-                        .clip(RoundedCornerShape(24.dp))
-                ) {
-                    Image(
-                        painter = painterResource(id = R.drawable.brick_break_bg),
-                        contentDescription = "img",
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop
-                    )
-
-                    BoxWithConstraints(modifier = Modifier.fillMaxSize().padding(10.dp)) {
-                        GameBoard(
-                            gameState = gameState,
-                            width = constraints.maxWidth.toFloat(),
-                            height = constraints.maxHeight.toFloat(),
-                            onGameOver =handleGameOver,
-                            onBrickHit = {
-                                SoundManager.playBrickPointSound()
-                                score++
-                                if (score > best) {
-                                    best = score
-                                    // 🔹 SAVE IMMEDIATELY HERE
-                                    // This ensures if the user hits back, the score is already on disk.
-                                    BrickBreakHighScorePref.saveHighScore(context, score)
-                                }
-                            },
-                            onReset = { score = 0 }
-                        )
-                    }
-                }
-                Spacer(Modifier.height(12.dp))
-            }
+            Spacer(Modifier.height(12.dp))
             DividerLine2()
             Spacer(Modifier.height(10.dp))
             BannerAdView(
@@ -207,11 +181,97 @@ fun BrickBreakerScreen() {
             )
         }
 
+        if (gameState == GameState.GAME_OVER) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.8f))
+                    .blur(16.dp)
+            )
+        }
+
+        if (showContinueDialog) {
+            ContinueDialog(
+                cost = ContinueConfig.COST,
+                coinBalance = coinBalance,
+                onContinue = {
+                    coroutineScope.launch {
+                        if (ServiceLocator.provideCoinRepository().spend(ContinueConfig.COST, "continue_brick_breaker")) {
+                            continueOffered = true
+                            showContinueDialog = false
+                            continueTrigger++
+                            scoreSubmitted = false
+                            gameState = GameState.PLAYING
+                        }
+                    }
+                },
+                onWatchAd = {
+                    activity?.let {
+                        var rewardEarned = false
+                        RewardedAdManager.show(
+                            activity = it,
+                            adUnitId = AdConstants.TEST_REWARDED_ID,
+                            source = "continue_brick_breaker_ad",
+                            onRewardEarned = { rewardEarned = true },
+                            onDismiss = {
+                                continueOffered = true
+                                showContinueDialog = false
+                                if (rewardEarned) {
+                                    continueTrigger++
+                                    scoreSubmitted = false
+                                    gameState = GameState.PLAYING
+                                }
+                            }
+                        )
+                    } ?: run {
+                        continueOffered = true
+                        showContinueDialog = false
+                    }
+                },
+                onDecline = {
+                    continueOffered = true
+                    showContinueDialog = false
+                }
+            )
+        } else if (gameState == GameState.GAME_OVER) {
+            Box(modifier = Modifier.fillMaxWidth().fillMaxHeight()) {
+                Image(
+                    painter = painterResource(id = R.drawable.brick_end_bg),
+                    contentDescription = "img",
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop
+                )
+                GameOverScreen2(
+                    score = score,
+                    highScore = best,
+                    onPlayAgain = {
+                        val startFresh = {
+                            score = 0
+                            continueOffered = false
+                            scoreSubmitted = false
+                            resetTrigger++
+                            gameState = GameState.PLAYING
+                        }
+
+                        if (!hasShownInterstitial) {
+                            hasShownInterstitial = true
+
+                            activity?.let {
+                                InterstitialAdManager.show(it) { startFresh() }
+                            } ?: startFresh()
+
+                        } else {
+                            startFresh()
+                        }
+                    }
+                )
+            }
         }
     }
+}
 
 @Composable
-fun GameBoard(gameState: GameState,width: Float, height: Float,onGameOver: () -> Unit, onBrickHit: () -> Unit, onReset: () -> Unit) {
+fun GameBoard(gameState: GameState, resetTrigger: Int, continueTrigger: Int, width: Float, height: Float,onGameOver: () -> Unit, onBrickHit: () -> Unit, onReset: () -> Unit) {
     val brickCols = 7
     val bHeight = 50f
     val gutter = 4f
@@ -234,6 +294,8 @@ fun GameBoard(gameState: GameState,width: Float, height: Float,onGameOver: () ->
     var currentSpeed by remember { mutableStateOf(initialSpeed) }
     var ballVelocity by remember { mutableStateOf(Offset(initialSpeed, -initialSpeed)) }
     var hitCounter by remember { mutableStateOf(0) }
+    var lastResetTrigger by remember { mutableStateOf(-1) }
+    var lastContinueTrigger by remember { mutableStateOf(continueTrigger) }
 
     val bricks = remember { mutableStateListOf<BrickData>() }
 
@@ -252,21 +314,36 @@ fun GameBoard(gameState: GameState,width: Float, height: Float,onGameOver: () ->
         }
     }
 
-    LaunchedEffect(gameState) {
+    LaunchedEffect(gameState, resetTrigger, continueTrigger) {
         if (gameState == GameState.PLAYING) {
-            bricks.clear()
-            repeat(5) { row ->
-                repeat(brickCols) { col ->
-                    bricks.add(BrickData(
-                        rect = Rect(col * (bWidth + gutter) + gutter, row * (bHeight + gutter) + 20f, col * (bWidth + gutter) + gutter + bWidth, row * (bHeight + gutter) + 20f + bHeight),
-                        color = getRowColor(row)
-                    ))
+            if (resetTrigger != lastResetTrigger) {
+                // Fresh run: rebuild the brick layout and reset everything.
+                bricks.clear()
+                repeat(5) { row ->
+                    repeat(brickCols) { col ->
+                        bricks.add(BrickData(
+                            rect = Rect(col * (bWidth + gutter) + gutter, row * (bHeight + gutter) + 20f, col * (bWidth + gutter) + gutter + bWidth, row * (bHeight + gutter) + 20f + bHeight),
+                            color = getRowColor(row)
+                        ))
+                    }
                 }
-            }
 
-            currentSpeed = initialSpeed
-            ballVelocity = Offset(initialSpeed, -initialSpeed)
-            ballPos = Offset(width / 2, height * 0.7f)
+                currentSpeed = initialSpeed
+                ballVelocity = Offset(initialSpeed, -initialSpeed)
+                ballPos = Offset(width / 2, height * 0.7f)
+                paddleX = width / 2 - paddleWidth / 2
+                hitCounter = 0
+                lastResetTrigger = resetTrigger
+                lastContinueTrigger = continueTrigger
+            } else if (continueTrigger != lastContinueTrigger) {
+                // Continue: keep the brick layout, score and paddle position —
+                // just re-serve the ball so the player isn't insta-killed by the
+                // same drop that ended the previous run.
+                ballVelocity = Offset(currentSpeed, -currentSpeed)
+                ballPos = Offset(paddleX + paddleWidth / 2, height * 0.7f)
+                bricks.removeAll { it.rect.bottom >= height - 150f }
+                lastContinueTrigger = continueTrigger
+            }
 
             while (gameState == GameState.PLAYING) {
                 var nextX = ballPos.x + ballVelocity.x
@@ -337,7 +414,7 @@ fun GameBoard(gameState: GameState,width: Float, height: Float,onGameOver: () ->
                 // --- 4. GAME OVER CONDITIONS ---
                 if (nextY > height || bricks.any { it.rect.bottom >= height - 150f }) {
                     SoundManager.playHitSound()
-                   onGameOver()
+                    onGameOver()
                 }
 
                 ballPos = Offset(nextX, nextY)
@@ -412,7 +489,7 @@ fun GameScoreChip(text: String) {
             .width(110.dp)
             .height(35.dp)
             .background(brush = Brush.linearGradient(listOf(Color(0xFF4D8CFF),
-                    Color(0xFF2F6BFF))), RoundedCornerShape(20.dp)),
+                Color(0xFF2F6BFF))), RoundedCornerShape(20.dp)),
         contentAlignment = Alignment.Center
     ) {
         Text(text, color = Color(0xFFFFD84D), fontSize = 12.sp, fontWeight = FontWeight.Bold)

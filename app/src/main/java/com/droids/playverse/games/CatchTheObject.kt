@@ -1,10 +1,7 @@
 package com.droids.playverse.games
 
-import android.os.Bundle
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
-import androidx.activity.compose.setContent
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
@@ -14,7 +11,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -27,7 +23,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.modifier.modifierLocalConsumer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
@@ -39,26 +34,23 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.droids.playverse.AdConstants
-import com.droids.playverse.InterstitialAdManager
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.droids.playverse.ads.AdConstants
+import com.droids.playverse.ui.components.ContinueConfig
+import com.droids.playverse.ads.InterstitialAdManager
 import com.droids.playverse.R
-import com.droids.playverse.data.BrickBreakHighScorePref
-import com.droids.playverse.data.CatchTheObjectHighScorePref
+import com.droids.playverse.sound.SoundManager
+import com.droids.playverse.ads.RewardedAdManager
+import com.droids.playverse.data.ServiceLocator
+import com.droids.playverse.ui.screens.requestReview
+import com.droids.playverse.ui.components.ContinueDialog
+import com.droids.playverse.ui.components.TopBar
+import com.droids.playverse.ui.viewmodel.CoinViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 import kotlin.random.Random
-
-class CatchTheObject : ComponentActivity() {
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        InterstitialAdManager.load(
-            this,
-            AdConstants.TEST_INTERSTITIAL_ID
-        )
-        setContent { CatchTheObjectGame() }
-    }
-}
 
 /* ------------------ DATA ------------------ */
 
@@ -85,13 +77,14 @@ data class FallingObject(
 /* ------------------ GAME ------------------ */
 @Preview(showSystemUi = true)
 @Composable
-fun CatchTheObjectGame() {
+fun CatchTheObjectGame(onExit: () -> Unit = {}) {
     var hasShownInterstitial by remember { mutableStateOf(false) }
     val activity = LocalActivity.current
+    val context = LocalContext.current
 
-    var context= LocalContext.current
+    val scoreRepository = remember { ServiceLocator.provideScoreRepository() }
     var score by remember { mutableIntStateOf(0) }
-    var highScore by remember { mutableStateOf(CatchTheObjectHighScorePref.getHighScore(context))}
+    val highScore by scoreRepository.highScoreFlow("catch").collectAsStateWithLifecycle(initialValue = 0)
     var gameOver by remember { mutableStateOf(false) }
     var bombHit by remember { mutableStateOf(false) }
     var shakeX by remember { mutableFloatStateOf(0f) }
@@ -100,6 +93,19 @@ fun CatchTheObjectGame() {
     val basketScale = remember { Animatable(1f) }
     var objects by remember { mutableStateOf(listOf<FallingObject>()) }
     val itemTypes = remember { ObjectType.values() }
+
+    val coinViewModel: CoinViewModel = viewModel()
+    val coinBalance by coinViewModel.balance.collectAsStateWithLifecycle()
+    var continueOffered by remember { mutableStateOf(false) }
+    var showContinueDialog by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        activity?.let {
+            InterstitialAdManager.load(it, AdConstants.TEST_INTERSTITIAL_ID)
+            RewardedAdManager.load(it, AdConstants.TEST_REWARDED_ID)
+        }
+    }
+
     BackHandler {
         gameOver = true
 
@@ -108,20 +114,18 @@ fun CatchTheObjectGame() {
 
             activity?.let {
                 InterstitialAdManager.show(it) {
-                    it.finish()
+                    onExit()
                 }
-            } ?: run {
-                activity?.finish()
-            }
+            } ?: onExit()
 
         } else {
-            activity?.finish()
+            onExit()
         }
     }
 
     Box(modifier = Modifier.fillMaxSize().offset { IntOffset(shakeX.roundToInt(), 0) }) {
         Column(modifier = Modifier.fillMaxSize().background(Color(0xFFD6EFFF))) {
-            TopBar("CATCH THE OBJECT",Color(0xFF2F79C9))
+            TopBar("CATCH THE OBJECT", Color(0xFF2F79C9), onBack = onExit)
             Spacer(Modifier.height(12.dp))
             Spacer(Modifier.height(2.dp).fillMaxWidth().background(Color.Black))
 
@@ -220,9 +224,8 @@ fun CatchTheObjectGame() {
                                         if (obj.type.isBomb) {
                                             SoundManager.playBombSound()
                                             bombHit = true; gameOver = true;
-                                            if (score > highScore) {
-                                                highScore = score
-                                                CatchTheObjectHighScorePref.saveHighScore(context, score)
+                                            if (!continueOffered) {
+                                                showContinueDialog = true
                                             }
                                             break
                                         }
@@ -256,6 +259,19 @@ fun CatchTheObjectGame() {
                         shakeX = 0f; bombHit = false
                     }
                 }
+
+                // Score submission is intentionally kept in its own effect, separate
+                // from the physics/game loop above. Submitting it inline there caused
+                // Compose to cancel the in-flight DB write the instant `gameOver`
+                // flipped to true (since that's the loop's own key), so the high
+                // score never actually persisted.
+                LaunchedEffect(gameOver) {
+                    if (gameOver) {
+                        ServiceLocator.provideCoinRepository().earnFromSession("catch")
+                        ServiceLocator.provideCoinRepository().earnFromScore("catch", score)
+                        if (scoreRepository.submitScore("catch", score)) requestReview(context)
+                    }
+                }
                 GameScoreOverlay(score, highScore)
             }
             Spacer(Modifier.height(2.dp).fillMaxWidth().background(Color.Black))
@@ -266,7 +282,62 @@ fun CatchTheObjectGame() {
             Spacer(Modifier.height(22.dp))
         }
 
-        if (gameOver) {
+        if (gameOver && !showContinueDialog) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.8f))
+                    .blur(16.dp)
+            )
+        }
+
+        if (showContinueDialog) {
+            ContinueDialog(
+                cost = ContinueConfig.COST,
+                coinBalance = coinBalance,
+                onContinue = {
+                    scope.launch {
+                        if (ServiceLocator.provideCoinRepository().spend(ContinueConfig.COST, "continue_catch_the_object")) {
+                            continueOffered = true
+                            showContinueDialog = false
+                            // Remove only the object that killed us (the caught bomb);
+                            // everything else — score, basket position, remaining
+                            // falling objects — stays exactly as it was.
+                            objects = objects.filterNot { it.isCaught && it.type.isBomb }
+                            gameOver = false
+                        }
+                    }
+                },
+                onWatchAd = {
+                    activity?.let {
+                        var rewardEarned = false
+                        RewardedAdManager.show(
+                            activity = it,
+                            adUnitId = AdConstants.TEST_REWARDED_ID,
+                            source = "continue_catch_the_object_ad",
+                            onRewardEarned = { rewardEarned = true },
+                            onDismiss = {
+                                continueOffered = true
+                                showContinueDialog = false
+                                if (rewardEarned) {
+                                    objects = objects.filterNot { it.isCaught && it.type.isBomb }
+                                    gameOver = false
+                                }
+                            }
+                        )
+                    } ?: run {
+                        continueOffered = true
+                        showContinueDialog = false
+                    }
+                },
+                onDecline = {
+                    continueOffered = true
+                    showContinueDialog = false
+                }
+            )
+        }
+
+        if (gameOver && !showContinueDialog) {
             Column(modifier = Modifier.background(Color.Black.copy(0.7f))) {
                 GameOverScreen3(score, highScore) {
 
@@ -278,12 +349,14 @@ fun CatchTheObjectGame() {
                                 objects = emptyList()
                                 score = 0
                                 gameOver = false
+                                continueOffered = false
                                 scope.launch { basketScale.snapTo(1f) }
                             }
                         } ?: run {
                             objects = emptyList()
                             score = 0
                             gameOver = false
+                            continueOffered = false
                             scope.launch { basketScale.snapTo(1f) }
                         }
 
@@ -291,6 +364,7 @@ fun CatchTheObjectGame() {
                         objects = emptyList()
                         score = 0
                         gameOver = false
+                        continueOffered = false
                         scope.launch { basketScale.snapTo(1f) }
                     }
                 }
@@ -472,35 +546,9 @@ fun GameOverScreen3(
             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4FC3F7)),
             shape = RoundedCornerShape(50)
         ) {
-                Text("Play Again", fontSize = 18.sp)
+            Text("Play Again", fontSize = 18.sp)
 
         }
 
-    }
-}
-
-
-
-@Composable
-fun TopBar(heading: String,color:Color) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(70.dp)
-            .padding(top = 20.dp),
-        verticalAlignment = Alignment.Bottom
-    ) {
-        Spacer(Modifier.size(48.dp))
-
-        Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
-            Text(
-                text = heading,
-                color =color,
-                fontSize = 23.sp,
-                fontFamily = FontFamily(Font(R.font.poppins_extrabold))
-            )
-        }
-
-        Spacer(Modifier.size(48.dp))
     }
 }

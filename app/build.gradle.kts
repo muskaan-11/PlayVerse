@@ -2,6 +2,7 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.ksp)
     id("com.google.gms.google-services")
 }
 
@@ -13,19 +14,27 @@ android {
         applicationId = "com.droids.playverse"
         minSdk = 24
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 4
+        versionName = "1.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
+        debug {
+            buildConfigField("String", "BANNER_AD_UNIT_ID", "\"ca-app-pub-8678839926764431/5038534528\"")
+            buildConfigField("String", "INTERSTITIAL_AD_UNIT_ID", "\"ca-app-pub-8678839926764431/2686977000\"")
+            buildConfigField("String", "REWARDED_AD_UNIT_ID", "\"ca-app-pub-8678839926764431/4990022629\"")
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            buildConfigField("String", "BANNER_AD_UNIT_ID", "\"ca-app-pub-8678839926764431/5038534528\"")
+            buildConfigField("String", "INTERSTITIAL_AD_UNIT_ID", "\"ca-app-pub-8678839926764431/2686977000\"")
+            buildConfigField("String", "REWARDED_AD_UNIT_ID", "\"ca-app-pub-8678839926764431/4990022629\"")
         }
     }
     compileOptions {
@@ -37,6 +46,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 
@@ -64,4 +74,9 @@ dependencies {
     implementation(platform("com.google.firebase:firebase-bom:34.9.0"))
     implementation("com.google.firebase:firebase-analytics")
     implementation("com.google.android.gms:play-services-ads:23.0.0")
+    implementation("com.google.android.ump:user-messaging-platform:4.0.0")
+    implementation("com.google.android.play:review-ktx:2.0.1")
+    implementation(libs.androidx.room.runtime)
+    implementation(libs.androidx.room.ktx)
+    ksp(libs.androidx.room.compiler)
 }

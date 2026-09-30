@@ -1,18 +1,12 @@
 package com.droids.playverse.games
 
-import android.R
 import android.app.Activity
-import android.os.Bundle
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
-import androidx.activity.compose.setContent
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -22,7 +16,6 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -33,12 +26,15 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.Font
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.viewinterop.AndroidView
-import com.droids.playverse.AdConstants.TEST_BANNER_ID
-import com.droids.playverse.AdConstants.TEST_INTERSTITIAL_ID
-import com.droids.playverse.InterstitialAdManager
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.droids.playverse.ads.AdConstants.TEST_BANNER_ID
+import com.droids.playverse.ads.AdConstants.TEST_INTERSTITIAL_ID
+import com.droids.playverse.ads.InterstitialAdManager
+import com.droids.playverse.sound.SoundManager
+import com.droids.playverse.data.ServiceLocator
+import com.droids.playverse.ui.screens.requestReview
+import com.droids.playverse.ui.components.TopBar
 import com.droids.playverse.ui.theme.BgBottom
 import com.droids.playverse.ui.theme.BgTop
 import com.droids.playverse.ui.theme.BoardColor
@@ -48,26 +44,13 @@ import com.google.android.gms.ads.AdRequest
 import com.google.android.gms.ads.AdSize
 import com.google.android.gms.ads.AdView
 
-class TicTacToeActivity: ComponentActivity(){
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        InterstitialAdManager.load(
-            this,
-            TEST_INTERSTITIAL_ID
-        )
-
-        setContent {
-            TicTacToeScreen()
-        }
-    }
-}
 // Color Palette
 
 
 
 @Preview(showSystemUi = true)
 @Composable
-fun TicTacToeScreen() {
+fun TicTacToeScreen(onExit: () -> Unit = {}) {
     var board by remember { mutableStateOf(Array(9) { "" }) }
     var isXTurn by remember { mutableStateOf(true) }
     var winner by remember { mutableStateOf<String?>(null) }
@@ -83,6 +66,15 @@ fun TicTacToeScreen() {
     var hasShownExitAd by remember { mutableStateOf(false) }
 
     val activity = context as Activity
+
+    // "Score" is the higher of the two players' win counts reached in a single
+    // sitting (matches how the single-player games track a best-of-session score).
+    val scoreRepository = remember { ServiceLocator.provideScoreRepository() }
+    val bestScore by scoreRepository.highScoreFlow("tic_tac_toe").collectAsStateWithLifecycle(initialValue = 0)
+
+    LaunchedEffect(Unit) {
+        InterstitialAdManager.load(activity, TEST_INTERSTITIAL_ID)
+    }
 
 
     // Animation state for the line (0f to 1f)
@@ -129,7 +121,11 @@ fun TicTacToeScreen() {
             }
         }
         if (winner != null) {
+            ServiceLocator.provideCoinRepository().earnFromSession("tic_tac_toe")
             gamesPlayed++
+
+            val isNewBest = scoreRepository.submitScore("tic_tac_toe", maxOf(oScore, xScore))
+            if (isNewBest) requestReview(context)
 
             if (gamesPlayed >= 7 && !hasShownContinueDialog) {
                 hasShownContinueDialog = true
@@ -148,10 +144,10 @@ fun TicTacToeScreen() {
             hasShownExitAd = true
 
             InterstitialAdManager.show(activity) {
-                activity.finish()
+                onExit()
             }
         } else {
-            activity.finish()
+            onExit()
         }
     }
 
@@ -187,7 +183,7 @@ fun TicTacToeScreen() {
             .background(Brush.verticalGradient(listOf(Color(0xFFE0D7FF), Color(0xFFF3EEFF))))
     ) {
         // --- Top Bar (Remains exactly as provided) ---
-        TopBar("TIC TAC TOE", Color(0xFF6A63C5))
+        TopBar("TIC TAC TOE", Color(0xFF6A63C5), onBack = onExit)
         Spacer(modifier = Modifier.height(12.dp))
         Spacer(Modifier.height(2.dp).fillMaxWidth().background(Color.Black))
 
@@ -343,9 +339,11 @@ fun TicTacToeScreen() {
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp)
                         .offset(y = -20.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     ScoreBox(oScore, OColor)
+                    BestScoreChip(bestScore)
                     ScoreBox(xScore, XColor)
                 }
 
@@ -369,6 +367,14 @@ fun XComponent() {
     Canvas(modifier = Modifier.size(60.dp)) {
         drawLine(XColor, Offset(0f, 0f), Offset(size.width, size.height), strokeWidth = 15f, cap = StrokeCap.Round)
         drawLine(XColor, Offset(size.width, 0f), Offset(0f, size.height), strokeWidth = 15f, cap = StrokeCap.Round)
+    }
+}
+
+@Composable
+fun BestScoreChip(best: Int) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text("BEST", color = Color(0xFF6A63C5), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        Text(best.toString(), color = Color(0xFF6A63C5), fontSize = 20.sp, fontWeight = FontWeight.Bold)
     }
 }
 

@@ -1,10 +1,7 @@
 package com.droids.playverse.games
 
 import android.app.Activity
-import android.os.Bundle
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
-import androidx.activity.compose.setContent
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -14,7 +11,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -36,10 +32,15 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.droids.playverse.AdConstants.TEST_BANNER_ID
-import com.droids.playverse.AdConstants.TEST_INTERSTITIAL_ID
-import com.droids.playverse.InterstitialAdManager
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.droids.playverse.ads.AdConstants.TEST_BANNER_ID
+import com.droids.playverse.ads.AdConstants.TEST_INTERSTITIAL_ID
+import com.droids.playverse.ads.InterstitialAdManager
 import com.droids.playverse.R
+import com.droids.playverse.sound.SoundManager
+import com.droids.playverse.data.ServiceLocator
+import com.droids.playverse.ui.screens.requestReview
+import com.droids.playverse.ui.components.TopBar
 import com.droids.playverse.ui.theme.BgBottom
 import com.droids.playverse.ui.theme.BgTop
 import com.droids.playverse.ui.theme.BoardColor
@@ -47,21 +48,9 @@ import com.droids.playverse.ui.theme.OColor
 import com.droids.playverse.ui.theme.XColor
 import kotlinx.coroutines.delay
 
-class MemoryMatchActivity : ComponentActivity() {
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        InterstitialAdManager.load(
-            this,
-            TEST_INTERSTITIAL_ID
-        )
-        setContent {
-            MemoryMatchScreen()
-        }
-    }
-}
 @Preview(showSystemUi = true)
 @Composable
-fun MemoryMatchScreen() {
+fun MemoryMatchScreen(onExit: () -> Unit = {}) {
     // 11 unique pairs = 22 cards total
     var imageResources = remember {
         val base = listOf(
@@ -83,15 +72,23 @@ fun MemoryMatchScreen() {
     var winner by remember { mutableStateOf<String?>(null) }
     var hasShownExitAd by remember { mutableStateOf(false) }
 
+    // "Score" is the winning player's pair count for a single round — higher is better.
+    val scoreRepository = remember { ServiceLocator.provideScoreRepository() }
+    val bestScore by scoreRepository.highScoreFlow("memory_match").collectAsStateWithLifecycle(initialValue = 0)
+
     BackHandler {
         if (!hasShownExitAd) {
             hasShownExitAd = true
             InterstitialAdManager.show(activity) {
-                activity.finish()
+                onExit()
             }
         } else {
-            activity.finish()
+            onExit()
         }
+    }
+
+    LaunchedEffect(Unit) {
+        InterstitialAdManager.load(activity, TEST_INTERSTITIAL_ID)
     }
 
 
@@ -113,12 +110,16 @@ fun MemoryMatchScreen() {
 
             if (matchedIndices.size == imageResources.size) {
                 winner = if (blueScore > redScore) "BLUE" else if (redScore > blueScore) "RED" else "DRAW"
+                ServiceLocator.provideCoinRepository().earnFromSession("memory_match")
+                ServiceLocator.provideCoinRepository().earnFromScore("memory_match", blueScore + redScore)
+                val isNewBest = scoreRepository.submitScore("memory_match", maxOf(blueScore, redScore))
+                if (isNewBest) requestReview(context)
             }
         }
     }
 
     Column(modifier = Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFFE0D7FF), Color(0xFFF3EEFF))))) {
-        TopBar("MEMORY MATCH", Color(0xFF6A63C5))
+        TopBar("MEMORY MATCH", Color(0xFF6A63C5), onBack = onExit)
         Spacer(Modifier.height(12.dp))
         Spacer(Modifier.height(2.dp).fillMaxWidth().background(Color.Black))
 
@@ -160,6 +161,7 @@ fun MemoryMatchScreen() {
                 Column(modifier = Modifier.background(Color.Black.copy(0.7f))) {
                     GameOverScreen4(
                         winner = winner!!,
+                        bestScore = bestScore,
                         onRestart = {
                             InterstitialAdManager.show(activity) {
                                 // Reset all states
@@ -296,7 +298,8 @@ fun ScoreBox2(score: Int, color: Color, modifier: Modifier = Modifier) {
 }
 @Composable
 fun GameOverScreen4(
-   winner:String,
+    winner:String,
+    bestScore: Int = 0,
     onRestart: () -> Unit
 ) {
     Column(
@@ -337,7 +340,9 @@ fun GameOverScreen4(
                 Text("$winner WINS!", color = if(winner == "BLUE") OColor else XColor, fontWeight = FontWeight.ExtraBold, fontSize = 20.sp)
             }
         }
-        Spacer(modifier = Modifier.height(40.dp))
+        Spacer(modifier = Modifier.height(12.dp))
+        Text("Best round score: $bestScore", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+        Spacer(modifier = Modifier.height(28.dp))
         Button(
             onClick = onRestart,
             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4FC3F7)),
